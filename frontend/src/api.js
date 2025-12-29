@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-    baseURL: process.env.BACKEND_URL,
+    baseURL: "https://beyondchat-1-8e6y.onrender.com",
 });
 
 export default api;
