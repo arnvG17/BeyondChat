@@ -11,9 +11,33 @@ import { scrape } from "../scrape.js";
 // actually, let's keep it simple and just replace the route handler and the helper functions
 // I need to see the imports again to be clean, but for now let's just replace the route block.
 
-router.get("/scrape", async (req, res) => {
+router.get("/all", async (req, res) => {
   try {
-    console.log("Starting scrape...");
+    const articles = await Article.find().sort({ createdAt: -1 });
+    res.json({
+      count: articles.length,
+      articles: articles.map(article => ({
+        id: article._id,
+        title: article.title,
+        url: article.url,
+        // content: article.content, // Not needed for list view, save bandwidth? 
+        // User requirements said "hyperlink to original", "title".
+        // Let's keep it lightweight.
+        // Wait, prompt 1 said "Display... optional image".
+        image: article.image || null
+      }))
+    });
+  } catch (error) {
+    console.error("Error fetching all articles:", error);
+    res.status(500).json({ error: "Failed to fetch articles", message: error.message });
+  }
+});
+
+router.post("/scrape", async (req, res) => {
+  try {
+    console.log("Starting scrape driven by button click...");
+    // We can pass parameters if needed, e.g. req.body.limit
+    // For now using default behavior
     const stats = await scrape();
     res.json({ message: "Scraping complete", stats });
   } catch (error) {
@@ -110,6 +134,63 @@ router.get("/:id", async (req, res) => {
   } catch (error) {
     console.error("Error fetching article:", error);
     res.status(500).json({ error: "Failed to fetch article", message: error.message });
+  }
+});
+
+// Update article content by re-scraping
+router.put("/:id", async (req, res) => {
+  try {
+    const article = await Article.findById(req.params.id);
+    if (!article) {
+      return res.status(404).json({ error: "Article not found" });
+    }
+
+    console.log(`Updating article ${article._id}: ${article.url}`);
+
+    // Fetch page
+    const response = await axios.get(article.url, {
+      timeout: 10000,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+      }
+    });
+
+    const html = response.data;
+    const $ = cheerio.load(html);
+
+    // Remove unwanted elements
+    $('nav, header, footer, aside, script, style, .widget, .sidebar, #comments, .comments-area').remove();
+
+    // Extract content
+    let $content = $('div[data-widget_type="theme-post-content.default"]');
+
+    // Fallbacks
+    if ($content.length === 0 || $content.text().trim().length < 200) { $content = $('article .entry-content'); }
+    if ($content.length === 0 || $content.text().trim().length < 200) { $content = $('article .post-content'); }
+    if ($content.length === 0 || $content.text().trim().length < 200) { $content = $('article'); }
+    if ($content.length === 0 || $content.text().trim().length < 200) { $content = $('main article'); }
+    if ($content.length === 0 || $content.text().trim().length < 200) { $content = $('main'); }
+    if ($content.length === 0 || $content.text().trim().length < 200) { $content = $('p'); }
+
+    // Normalize
+    let cleanText = $content.text().replace(/\s+/g, ' ').trim();
+
+    if (!cleanText || cleanText.length < 50) {
+      return res.status(400).json({ error: "Could not extract sufficient content from URL" });
+    }
+
+    // Update in place
+    article.content = cleanText;
+    article.updatedContent = cleanText; // Also populate new field
+    article.isUpdated = true;
+
+    await article.save();
+
+    res.json(article);
+
+  } catch (error) {
+    console.error("Update error:", error.message);
+    res.status(500).json({ error: "Update failed", message: error.message });
   }
 });
 
